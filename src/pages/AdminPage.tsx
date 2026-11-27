@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   CheckCircle2,
@@ -17,8 +17,34 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { apiRequest, formatDateTime, formatINR } from '../lib/api';
-import type { ProductItem } from '../types';
+import { formatDateTime, formatINR } from '../lib/api';
+import {
+  adminBroadcastNotification,
+  adminCreateGiftCode,
+  adminDeleteGiftCode,
+  adminDeleteProduct,
+  adminGetOverview,
+  adminGetReferrals,
+  adminGetSettings,
+  adminGetUserActivity,
+  adminListAuditLogs,
+  adminListDeposits,
+  adminListGiftCodes,
+  adminListProducts,
+  adminListTransactions,
+  adminListUsers,
+  adminListWithdrawals,
+  adminProcessWithdrawal,
+  adminUpdateSettings,
+  adminUpdateUserStatus,
+  adminUpsertProduct,
+  adminVerifyDeposit,
+  checkCurrentUserAdmin,
+  signInWithSupabase,
+  signOutFromSupabase,
+} from '../lib/supabaseApi';
+import { supabase } from '../lib/supabase';
+import type { BannerItem, ProductItem } from '../types';
 
 interface AdminPageProps {
   onExit: () => void;
@@ -35,15 +61,19 @@ type AdminSection =
   | 'audit';
 
 export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated }) => {
-  const [adminToken, setAdminToken] = useState<string | null>(null);
-  const [needsSetup, setNeedsSetup] = useState<boolean>(false);
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const [authenticatedUserId, setAuthenticatedUserId] = useState<string | null>(null);
+  const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null);
+  const [hasAnyAdmin, setHasAnyAdmin] = useState<boolean>(true);
   const [statusLoading, setStatusLoading] = useState(true);
 
-  const [username, setUsername] = useState('mahendra94');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [section, setSection] = useState<AdminSection>('overview');
+  const [sectionLoading, setSectionLoading] = useState(false);
   const [overview, setOverview] = useState<Record<string, number> | null>(null);
   const [users, setUsers] = useState<Record<string, unknown>[]>([]);
   const [userSearch, setUserSearch] = useState('');
@@ -75,112 +105,110 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
   });
 
   const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
-  const [bannerForm, setBannerForm] = useState<{
-    id: string;
-    title: string;
-    subtitle: string;
-    badge_text: string;
-  } | null>(null);
+  const [bannerForm, setBannerForm] = useState<BannerItem | null>(null);
   const [announcement, setAnnouncement] = useState({ title: '', message: '' });
   const [auditLogs, setAuditLogs] = useState<Record<string, unknown>[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedbackIsError, setFeedbackIsError] = useState(false);
 
-  useEffect(() => {
-    apiRequest<{ needsSetup: boolean }>('/api/admin/status')
-      .then((res) => setNeedsSetup(res.needsSetup))
-      .catch(() => {})
-      .finally(() => setStatusLoading(false));
+  const verifyAdminStatus = useCallback(async () => {
+    setStatusLoading(true);
+    setAuthError(null);
+    try {
+      const [res, authUserRes] = await Promise.all([
+        checkCurrentUserAdmin(),
+        supabase ? supabase.auth.getUser() : Promise.resolve({ data: { user: null } }),
+      ]);
+      setIsAdminVerified(res.isAdmin);
+      setAuthenticatedUserId(res.userId);
+      setAuthenticatedEmail(authUserRes.data.user?.email ?? null);
+      setHasAnyAdmin(res.hasAnyAdmin);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Unable to verify admin privileges.');
+      setIsAdminVerified(false);
+    } finally {
+      setStatusLoading(false);
+    }
   }, []);
 
-  const loadSectionData = async (tok: string, sec: AdminSection) => {
-    try {
-      if (sec === 'overview') {
-        const res = await apiRequest<Record<string, number>>('/api/admin/overview', { token: tok });
-        setOverview(res);
-      } else if (sec === 'users') {
-        const res = await apiRequest<{ users: Record<string, unknown>[] }>(
-          `/api/admin/users?q=${encodeURIComponent(userSearch)}`,
-          { token: tok }
-        );
-        setUsers(res.users);
-      } else if (sec === 'products') {
-        const res = await apiRequest<{ products: ProductItem[] }>('/api/admin/products', {
-          token: tok,
-        });
-        setProducts(res.products);
-      } else if (sec === 'financials') {
-        const [d, w, t] = await Promise.all([
-          apiRequest<{ deposits: Record<string, unknown>[] }>('/api/admin/deposits', { token: tok }),
-          apiRequest<{ withdrawals: Record<string, unknown>[] }>('/api/admin/withdrawals', {
-            token: tok,
-          }),
-          apiRequest<{ transactions: Record<string, unknown>[] }>('/api/admin/transactions', {
-            token: tok,
-          }),
-        ]);
-        setDeposits(d.deposits);
-        setWithdrawals(w.withdrawals);
-        setTransactions(t.transactions);
-      } else if (sec === 'referrals') {
-        const [r, g] = await Promise.all([
-          apiRequest<NonNullable<typeof referralData>>('/api/admin/referrals', { token: tok }),
-          apiRequest<{ giftCodes: Record<string, unknown>[] }>('/api/admin/gift-codes', {
-            token: tok,
-          }),
-        ]);
-        setReferralData(r);
-        setGiftCodes(g.giftCodes);
-      } else if (sec === 'settings') {
-        const res = await apiRequest<{
-          settings: Record<string, string>;
-          banners: { id: string; title: string; subtitle: string; badge_text: string }[];
-        }>('/api/admin/settings', { token: tok });
-        setSettingsForm(res.settings);
-        if (res.banners[0]) setBannerForm(res.banners[0]);
-      } else if (sec === 'audit') {
-        const res = await apiRequest<{ auditLogs: Record<string, unknown>[] }>(
-          '/api/admin/audit-logs',
-          { token: tok }
-        );
-        setAuditLogs(res.auditLogs);
+  useEffect(() => {
+    verifyAdminStatus();
+  }, [verifyAdminStatus]);
+
+  const showFeedback = useCallback((message: string, isError = false) => {
+    setFeedbackIsError(isError);
+    setFeedback(message);
+  }, []);
+
+  const loadSectionData = useCallback(
+    async (sec: AdminSection) => {
+      setSectionLoading(true);
+      try {
+        if (sec === 'overview') {
+          setOverview(await adminGetOverview());
+        } else if (sec === 'users') {
+          setUsers(await adminListUsers(userSearch));
+        } else if (sec === 'products') {
+          setProducts(await adminListProducts());
+        } else if (sec === 'financials') {
+          const [d, w, t] = await Promise.all([
+            adminListDeposits(),
+            adminListWithdrawals(),
+            adminListTransactions(),
+          ]);
+          setDeposits(d);
+          setWithdrawals(w);
+          setTransactions(t);
+        } else if (sec === 'referrals') {
+          const [r, g] = await Promise.all([adminGetReferrals(), adminListGiftCodes()]);
+          setReferralData(r);
+          setGiftCodes(g);
+        } else if (sec === 'settings') {
+          const res = await adminGetSettings();
+          setSettingsForm(res.settings);
+          if (res.banners[0]) setBannerForm(res.banners[0]);
+        } else if (sec === 'audit') {
+          setAuditLogs(await adminListAuditLogs());
+        }
+      } catch (err) {
+        showFeedback(err instanceof Error ? err.message : 'Unable to load section data.', true);
+      } finally {
+        setSectionLoading(false);
       }
-    } catch (err) {
-      setFeedback(err instanceof Error ? err.message : 'Unable to load section data.');
-    }
-  };
+    },
+    [userSearch, showFeedback]
+  );
 
   useEffect(() => {
-    if (adminToken) {
-      loadSectionData(adminToken, section);
+    if (isAdminVerified) {
+      loadSectionData(section);
     }
-  }, [adminToken, section]);
+  }, [isAdminVerified, section, loadSectionData]);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    setSigningIn(true);
     try {
-      const endpoint = needsSetup ? '/api/admin/bootstrap' : '/api/admin/login';
-      const res = await apiRequest<{ token: string }>(endpoint, {
-        method: 'POST',
-        body: { username, password },
-      });
-      setAdminToken(res.token);
-      setNeedsSetup(false);
+      await signInWithSupabase(email, password);
       setPassword('');
+      await verifyAdminStatus();
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Admin authentication failed.');
+    } finally {
+      setSigningIn(false);
     }
   };
 
   if (statusLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center mahendra-page-bg text-sm text-[#FFE89C]">
-        Loading Admin Console...
+        Verifying Server Admin Access...
       </div>
     );
   }
 
-  if (!adminToken) {
+  if (!isAdminVerified) {
     return (
       <div className="min-h-screen mahendra-page-bg flex items-center justify-center p-4">
         <div className="bg-white rounded-[26px] card-mint-border max-w-md w-full p-6 space-y-4">
@@ -191,12 +219,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
               </div>
               <div>
                 <h1 className="font-display font-extrabold text-lg text-[#17231C]">
-                  {needsSetup ? 'Initialize Admin Account' : 'Admin Console Sign In'}
+                  Admin Console Access
                 </h1>
                 <p className="text-xs text-[#6B8275]">
-                  {needsSetup
-                    ? 'First-run setup: claim the administrator credentials'
-                    : 'Server-verified role-based access control'}
+                  Server-verified role-based access via Supabase RLS
                 </p>
               </div>
             </div>
@@ -215,42 +241,89 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} className="space-y-3">
-            <div>
-              <label className="block text-xs font-bold text-[#17231C] mb-1">Admin Username</label>
-              <input
-                type="text"
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
-              />
+          {authenticatedUserId ? (
+            <div className="space-y-3 text-xs">
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
+                <div className="font-bold">
+                  {hasAnyAdmin
+                    ? 'Your signed-in account does not have administrator privileges.'
+                    : 'No administrator has been promoted in public.admin_users yet.'}
+                </div>
+                <p className="leading-relaxed">
+                  Admin privileges are verified strictly on the server via{' '}
+                  <code className="font-mono-num">public.admin_users</code>. To authorize this
+                  Supabase account, run the SQL below in your Supabase SQL Editor:
+                </p>
+                <pre className="p-2.5 rounded-lg bg-[#042313] text-[#FFE89C] text-[10px] overflow-x-auto select-all">
+                  {`INSERT INTO public.admin_users (user_id, email, role, is_active)\nVALUES ('${authenticatedUserId}', '${authenticatedEmail ?? 'admin@yourdomain.com'}', 'super_admin', TRUE)\nON CONFLICT (user_id) DO UPDATE SET is_active = TRUE;`}
+                </pre>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={verifyAdminStatus}
+                  className="flex-1 h-10 rounded-full brand-gradient text-white font-bold cursor-pointer"
+                >
+                  Re-check Admin Access
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await signOutFromSupabase().catch(() => {});
+                    await verifyAdminStatus();
+                  }}
+                  className="px-4 h-10 rounded-full bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                >
+                  Switch Account
+                </button>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-[#17231C] mb-1">
-                {needsSetup ? 'Create Admin Password (8+ chars)' : 'Admin Password'}
-              </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer"
-            >
-              {needsSetup ? 'Create Admin Account & Enter' : 'Sign In to Admin'}
-            </button>
-          </form>
+          ) : (
+            <form onSubmit={handleAuthSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-[#17231C] mb-1">
+                  Administrator Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@yourdomain.com"
+                  className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-[#17231C] mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={signingIn}
+                className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer disabled:opacity-60"
+              >
+                {signingIn ? 'Verifying...' : 'Sign In to Admin'}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     );
   }
 
-  const navItems: { id: AdminSection; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  const navItems: {
+    id: AdminSection;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }[] = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'users', label: 'Users', icon: Users },
     { id: 'products', label: 'Products', icon: Package },
@@ -263,13 +336,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
-    const isNew = !editingProduct.id;
-    const url = isNew ? '/api/admin/products' : `/api/admin/products/${editingProduct.id}`;
-    await apiRequest(url, {
-      method: isNew ? 'POST' : 'PUT',
-      token: adminToken,
-      body: {
-        name: editingProduct.name,
+    try {
+      await adminUpsertProduct({
+        id: editingProduct.id,
+        name: editingProduct.name ?? '',
         code: editingProduct.code,
         subtitle: editingProduct.subtitle,
         description: editingProduct.description,
@@ -280,12 +350,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
         totalReturn: Number(editingProduct.total_return),
         purchaseLimit: Number(editingProduct.purchase_limit),
         isPopular: Boolean(editingProduct.is_popular),
-        status: editingProduct.status,
-      },
-    });
-    setEditingProduct(null);
-    setFeedback('Product saved.');
-    await Promise.all([loadSectionData(adminToken, 'products'), onConfigUpdated()]);
+        status: editingProduct.status ?? 'active',
+      });
+      setEditingProduct(null);
+      showFeedback('Product saved.');
+      await Promise.all([loadSectionData('products'), onConfigUpdated()]);
+    } catch (err) {
+      showFeedback(err instanceof Error ? err.message : 'Unable to save product.', true);
+    }
   };
 
   return (
@@ -307,7 +379,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
 
         <button
           type="button"
-          onClick={() => setAdminToken(null)}
+          onClick={async () => {
+            await signOutFromSupabase().catch(() => {});
+            setIsAdminVerified(false);
+            onExit();
+          }}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold cursor-pointer"
         >
           <LogOut className="w-3.5 h-3.5" />
@@ -329,6 +405,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                   onClick={() => {
                     setSection(item.id);
                     setFeedback(null);
+                    setFeedbackIsError(false);
                   }}
                   className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap transition cursor-pointer ${
                     active
@@ -347,11 +424,30 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
         {/* Main Panel */}
         <main className="lg:col-span-9 space-y-4">
           {feedback && (
-            <div className="p-3 rounded-2xl bg-[#E7F7EE] border border-[#9CD9B8] text-xs font-semibold text-[#005B32] flex justify-between items-center">
+            <div
+              className={`p-3 rounded-2xl border text-xs font-semibold flex justify-between items-center ${
+                feedbackIsError
+                  ? 'bg-red-50 border-red-200 text-red-700'
+                  : 'bg-[#E7F7EE] border-[#9CD9B8] text-[#005B32]'
+              }`}
+            >
               <span>{feedback}</span>
-              <button type="button" onClick={() => setFeedback(null)} className="cursor-pointer">
+              <button
+                type="button"
+                onClick={() => {
+                  setFeedback(null);
+                  setFeedbackIsError(false);
+                }}
+                className="cursor-pointer"
+              >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+          )}
+
+          {sectionLoading && (
+            <div className="p-3 rounded-2xl bg-white card-mint-border text-xs font-semibold text-[#5B7265]">
+              Loading {section} data from Supabase...
             </div>
           )}
 
@@ -386,13 +482,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                     type="text"
                     value={userSearch}
                     onChange={(e) => setUserSearch(e.target.value)}
-                    placeholder="Search phone, username, invite code..."
+                    placeholder="Search email, phone, username, invite code..."
                     className="w-full bg-transparent text-xs focus:outline-none"
                   />
                 </div>
                 <button
                   type="button"
-                  onClick={() => loadSectionData(adminToken, 'users')}
+                  onClick={() => loadSectionData('users')}
                   className="px-4 h-10 rounded-xl brand-gradient text-white text-xs font-bold cursor-pointer"
                 >
                   Search
@@ -404,7 +500,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                   <thead className="text-[#6B8275] border-b border-[#EDF7F1]">
                     <tr>
                       <th className="py-2 pr-3">User</th>
-                      <th className="py-2 pr-3">Phone</th>
+                      <th className="py-2 pr-3">Contact</th>
                       <th className="py-2 pr-3">Balance</th>
                       <th className="py-2 pr-3">Status</th>
                       <th className="py-2">Actions</th>
@@ -417,7 +513,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                           {String(u.username)} ({String(u.referral_code)})
                         </td>
                         <td className="py-2.5 pr-3 font-mono-num">
-                          {String(u.country_code)} {String(u.phone)}
+                          {u.phone
+                            ? `${String(u.country_code)} ${String(u.phone)}`
+                            : String(u.email ?? '')}
                         </td>
                         <td className="py-2.5 pr-3 font-bold tabular-nums text-[#008C45]">
                           {formatINR(Number(u.available_balance))}
@@ -429,14 +527,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                           <button
                             type="button"
                             onClick={async () => {
-                              const res = await apiRequest<{
-                                orders: Record<string, unknown>[];
-                                transactions: Record<string, unknown>[];
-                              }>(`/api/admin/users/${u.id}/activity`, { token: adminToken });
-                              setSelectedUserActivity({
-                                username: String(u.username),
-                                ...res,
-                              });
+                              try {
+                                const res = await adminGetUserActivity(String(u.id));
+                                setSelectedUserActivity({
+                                  username: String(u.username),
+                                  ...res,
+                                });
+                              } catch (err) {
+                                showFeedback(
+                                  err instanceof Error ? err.message : 'Unable to load activity.',
+                                  true
+                                );
+                              }
                             }}
                             className="px-2.5 py-1 rounded-lg bg-[#E7F7EE] text-[#005B32] font-bold cursor-pointer"
                           >
@@ -445,13 +547,17 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                           <button
                             type="button"
                             onClick={async () => {
-                              const nextStatus = u.status === 'active' ? 'suspended' : 'active';
-                              await apiRequest(`/api/admin/users/${u.id}/status`, {
-                                method: 'PATCH',
-                                token: adminToken,
-                                body: { status: nextStatus },
-                              });
-                              loadSectionData(adminToken, 'users');
+                              try {
+                                const nextStatus = u.status === 'active' ? 'suspended' : 'active';
+                                await adminUpdateUserStatus(String(u.id), nextStatus);
+                                showFeedback(`User ${u.username} marked ${nextStatus}.`);
+                                await loadSectionData('users');
+                              } catch (err) {
+                                showFeedback(
+                                  err instanceof Error ? err.message : 'Unable to update user status.',
+                                  true
+                                );
+                              }
                             }}
                             className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold cursor-pointer"
                           >
@@ -524,14 +630,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                       <button
                         type="button"
                         onClick={async () => {
-                          await apiRequest(`/api/admin/products/${p.id}`, {
-                            method: 'DELETE',
-                            token: adminToken,
-                          });
-                          await Promise.all([
-                            loadSectionData(adminToken, 'products'),
-                            onConfigUpdated(),
-                          ]);
+                          try {
+                            await adminDeleteProduct(p.id);
+                            showFeedback(`Product ${p.name} removed.`);
+                            await Promise.all([loadSectionData('products'), onConfigUpdated()]);
+                          } catch (err) {
+                            showFeedback(
+                              err instanceof Error ? err.message : 'Unable to delete product.',
+                              true
+                            );
+                          }
                         }}
                         className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-bold cursor-pointer"
                       >
@@ -559,7 +667,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                       <div key={String(d.id)} className="py-3 flex flex-wrap items-center justify-between gap-3">
                         <div className="text-xs">
                           <div className="font-bold text-[#17231C]">
-                            {String(d.deposit_ref)} · {String(d.username)} ({String(d.phone)})
+                            {String(d.deposit_ref)} · {String(d.username)} ({String(d.phone ?? '')})
                           </div>
                           <div className="text-[#6B8275]">
                             {formatINR(Number(d.amount))} · {String(d.payment_method).toUpperCase()} ·
@@ -572,13 +680,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                             <button
                               type="button"
                               onClick={async () => {
-                                await apiRequest(`/api/admin/deposits/${d.id}/verify`, {
-                                  method: 'POST',
-                                  token: adminToken,
-                                  body: { decision: 'approved' },
-                                });
-                                setFeedback(`Deposit ${d.deposit_ref} approved and credited.`);
-                                loadSectionData(adminToken, 'financials');
+                                try {
+                                  await adminVerifyDeposit(String(d.id), 'approved');
+                                  showFeedback(`Deposit ${d.deposit_ref} approved and credited.`);
+                                  await loadSectionData('financials');
+                                } catch (err) {
+                                  showFeedback(
+                                    err instanceof Error ? err.message : 'Unable to verify deposit.',
+                                    true
+                                  );
+                                }
                               }}
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#008C45] text-white text-xs font-bold cursor-pointer"
                             >
@@ -588,13 +699,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                             <button
                               type="button"
                               onClick={async () => {
-                                await apiRequest(`/api/admin/deposits/${d.id}/verify`, {
-                                  method: 'POST',
-                                  token: adminToken,
-                                  body: { decision: 'rejected', note: 'UTR not matched' },
-                                });
-                                setFeedback(`Deposit ${d.deposit_ref} rejected.`);
-                                loadSectionData(adminToken, 'financials');
+                                try {
+                                  await adminVerifyDeposit(
+                                    String(d.id),
+                                    'rejected',
+                                    'UTR not matched'
+                                  );
+                                  showFeedback(`Deposit ${d.deposit_ref} rejected.`);
+                                  await loadSectionData('financials');
+                                } catch (err) {
+                                  showFeedback(
+                                    err instanceof Error ? err.message : 'Unable to reject deposit.',
+                                    true
+                                  );
+                                }
                               }}
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold cursor-pointer"
                             >
@@ -622,7 +740,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                       <div key={String(w.id)} className="py-3 flex flex-wrap items-center justify-between gap-3">
                         <div className="text-xs">
                           <div className="font-bold text-[#17231C]">
-                            {String(w.withdrawal_ref)} · {String(w.username)} ({String(w.phone)})
+                            {String(w.withdrawal_ref)} · {String(w.username)} ({String(w.phone ?? '')})
                           </div>
                           <div className="text-[#6B8275]">
                             Gross {formatINR(Number(w.gross_amount))} · Net{' '}
@@ -635,13 +753,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                             <button
                               type="button"
                               onClick={async () => {
-                                await apiRequest(`/api/admin/withdrawals/${w.id}/process`, {
-                                  method: 'POST',
-                                  token: adminToken,
-                                  body: { decision: 'approved' },
-                                });
-                                setFeedback(`Withdrawal ${w.withdrawal_ref} approved.`);
-                                loadSectionData(adminToken, 'financials');
+                                try {
+                                  await adminProcessWithdrawal(String(w.id), 'approved');
+                                  showFeedback(`Withdrawal ${w.withdrawal_ref} approved.`);
+                                  await loadSectionData('financials');
+                                } catch (err) {
+                                  showFeedback(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Unable to approve withdrawal.',
+                                    true
+                                  );
+                                }
                               }}
                               className="px-3 py-1.5 rounded-lg bg-[#008C45] text-white text-xs font-bold cursor-pointer"
                             >
@@ -650,13 +773,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                             <button
                               type="button"
                               onClick={async () => {
-                                await apiRequest(`/api/admin/withdrawals/${w.id}/process`, {
-                                  method: 'POST',
-                                  token: adminToken,
-                                  body: { decision: 'rejected', note: 'Bank details mismatch' },
-                                });
-                                setFeedback(`Withdrawal ${w.withdrawal_ref} rejected and refunded.`);
-                                loadSectionData(adminToken, 'financials');
+                                try {
+                                  await adminProcessWithdrawal(
+                                    String(w.id),
+                                    'rejected',
+                                    'Bank details mismatch'
+                                  );
+                                  showFeedback(
+                                    `Withdrawal ${w.withdrawal_ref} rejected and refunded.`
+                                  );
+                                  await loadSectionData('financials');
+                                } catch (err) {
+                                  showFeedback(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Unable to reject withdrawal.',
+                                    true
+                                  );
+                                }
                               }}
                               className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold cursor-pointer"
                             >
@@ -742,23 +876,27 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
-                    await apiRequest('/api/admin/gift-codes', {
-                      method: 'POST',
-                      token: adminToken,
-                      body: {
+                    try {
+                      await adminCreateGiftCode({
                         code: newGiftCode.code,
                         rewardAmount: Number(newGiftCode.rewardAmount),
                         maxUses: Number(newGiftCode.maxUses),
                         requiresActivePlan: newGiftCode.requiresActivePlan,
-                      },
-                    });
-                    setNewGiftCode({
-                      code: '',
-                      rewardAmount: '50',
-                      maxUses: '100',
-                      requiresActivePlan: true,
-                    });
-                    loadSectionData(adminToken, 'referrals');
+                      });
+                      setNewGiftCode({
+                        code: '',
+                        rewardAmount: '50',
+                        maxUses: '100',
+                        requiresActivePlan: true,
+                      });
+                      showFeedback('Gift code created.');
+                      await loadSectionData('referrals');
+                    } catch (err) {
+                      showFeedback(
+                        err instanceof Error ? err.message : 'Unable to create gift code.',
+                        true
+                      );
+                    }
                   }}
                   className="grid grid-cols-2 sm:grid-cols-4 gap-2"
                 >
@@ -811,11 +949,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                       <button
                         type="button"
                         onClick={async () => {
-                          await apiRequest(`/api/admin/gift-codes/${g.id}`, {
-                            method: 'DELETE',
-                            token: adminToken,
-                          });
-                          loadSectionData(adminToken, 'referrals');
+                          try {
+                            await adminDeleteGiftCode(String(g.id));
+                            showFeedback(`Gift code ${String(g.code)} deleted.`);
+                            await loadSectionData('referrals');
+                          } catch (err) {
+                            showFeedback(
+                              err instanceof Error ? err.message : 'Unable to delete gift code.',
+                              true
+                            );
+                          }
                         }}
                         className="p-1.5 text-red-600 cursor-pointer"
                       >
@@ -833,13 +976,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  await apiRequest('/api/admin/settings', {
-                    method: 'PUT',
-                    token: adminToken,
-                    body: { settings: settingsForm, banner: bannerForm },
-                  });
-                  await onConfigUpdated();
-                  setFeedback('Platform settings and content saved.');
+                  try {
+                    await adminUpdateSettings(settingsForm, bannerForm);
+                    await onConfigUpdated();
+                    showFeedback('Platform settings and content saved.');
+                  } catch (err) {
+                    showFeedback(
+                      err instanceof Error ? err.message : 'Unable to save settings.',
+                      true
+                    );
+                  }
                 }}
                 className="bg-white rounded-[24px] card-mint-border p-4 sm:p-5 space-y-4"
               >
@@ -853,6 +999,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                     { key: 'siteSubtitle', label: 'Website Tagline' },
                     { key: 'minRecharge', label: 'Min Recharge (₹)' },
                     { key: 'minWithdraw', label: 'Min Withdraw (₹)' },
+                    { key: 'maxWithdraw', label: 'Max Withdraw (₹)' },
                     { key: 'withdrawFeePercent', label: 'Withdraw Fee (%)' },
                     { key: 'withdrawTimeWindow', label: 'Withdraw Window' },
                     { key: 'commissionLv1', label: 'Level 1 Commission (%)' },
@@ -860,7 +1007,6 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                     { key: 'commissionLv3', label: 'Level 3 Commission (%)' },
                     { key: 'telegramLink', label: 'Telegram Channel URL' },
                     { key: 'supportContact', label: 'Support Contact' },
-                    { key: 'upiMerchantId', label: 'Merchant UPI ID' },
                     { key: 'popupTitle', label: 'Welcome Popup Title' },
                     { key: 'popupSubtitle', label: 'Welcome Popup Subtitle' },
                   ].map((field) => (
@@ -955,13 +1101,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  await apiRequest('/api/admin/notifications', {
-                    method: 'POST',
-                    token: adminToken,
-                    body: announcement,
-                  });
-                  setAnnouncement({ title: '', message: '' });
-                  setFeedback('Announcement broadcast to all users.');
+                  try {
+                    await adminBroadcastNotification(announcement.title, announcement.message);
+                    setAnnouncement({ title: '', message: '' });
+                    showFeedback('Announcement broadcast to all users.');
+                  } catch (err) {
+                    showFeedback(
+                      err instanceof Error ? err.message : 'Unable to broadcast announcement.',
+                      true
+                    );
+                  }
                 }}
                 className="bg-white rounded-[24px] card-mint-border p-4 sm:p-5 space-y-3"
               >
@@ -1011,8 +1160,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
                         {String(log.actor_type)}:{String(log.actor_id)}
                       </span>
                       {log.details_json ? (
-                        <div className="font-mono-num text-[10px] text-[#5B7265] mt-0.5">
-                          {String(log.details_json)}
+                        <div className="font-mono-num text-[10px] text-[#5B7265] mt-0.5 break-all">
+                          {typeof log.details_json === 'string'
+                            ? log.details_json
+                            : JSON.stringify(log.details_json)}
                         </div>
                       ) : null}
                     </div>
@@ -1202,8 +1353,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onExit, onConfigUpdated })
             </div>
             {selectedUserActivity.orders.map((o) => (
               <div key={String(o.id)} className="p-2.5 rounded-xl bg-[#F4FAF7] text-xs">
-                {String(o.order_number)} · {String(o.product_name)} · {formatINR(Number(o.amount))} ·{' '}
-                {String(o.status)}
+                {String(o.order_number)} · {String(o.plan_name ?? o.product_name ?? '')} ·{' '}
+                {formatINR(Number(o.amount))} · {String(o.status)}
               </div>
             ))}
             <div className="text-xs font-bold text-[#005B32] pt-2">

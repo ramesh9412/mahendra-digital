@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, ChevronLeft, Gift, Lock, Trophy, Unlock } from 'lucide-react';
-import { apiRequest, formatDateTime, formatINR } from '../lib/api';
+import { formatDateTime, formatINR } from '../lib/api';
+import { fetchMyTreasureState, redeemGiftCode } from '../lib/supabaseApi';
 import type { MainTab, TreasureResponse } from '../types';
 import { TreasureGiftBoxSvg } from '../components/BrandVisuals';
 
 interface TreasureBoxPageProps {
-  token: string;
+  refreshSignal?: number;
   onNavigate: (tab: MainTab) => void;
   onRefreshMe: () => Promise<void>;
 }
 
 export const TreasureBoxPage: React.FC<TreasureBoxPageProps> = ({
-  token,
+  refreshSignal = 0,
   onNavigate,
   onRefreshMe,
 }) => {
@@ -23,11 +24,12 @@ export const TreasureBoxPage: React.FC<TreasureBoxPageProps> = ({
   const [success, setSuccess] = useState<string | null>(null);
 
   const loadTreasure = async () => {
+    setLoading(true);
     try {
-      const res = await apiRequest<TreasureResponse>('/api/treasure', { token });
+      const res = await fetchMyTreasureState();
       setData(res);
-    } catch {
-      // ignore
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load Treasure Box.');
     } finally {
       setLoading(false);
     }
@@ -35,7 +37,7 @@ export const TreasureBoxPage: React.FC<TreasureBoxPageProps> = ({
 
   useEffect(() => {
     loadTreasure();
-  }, [token]);
+  }, [refreshSignal]);
 
   const handlePaste = async () => {
     try {
@@ -53,11 +55,7 @@ export const TreasureBoxPage: React.FC<TreasureBoxPageProps> = ({
     setSubmitting(true);
 
     try {
-      const res = await apiRequest<{ amount: number; code: string }>('/api/treasure/redeem', {
-        method: 'POST',
-        token,
-        body: { code: giftCode },
-      });
+      const res = await redeemGiftCode(giftCode);
       setSuccess(`Claimed ${formatINR(res.amount)} with code ${res.code}!`);
       setGiftCode('');
       await Promise.all([loadTreasure(), onRefreshMe()]);

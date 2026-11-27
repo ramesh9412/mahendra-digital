@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { createServer as createViteServer } from 'vite';
 import {
   type AuthenticatedRequest,
@@ -66,8 +67,11 @@ app.get('/api/config', (_req: Request, res: Response) => {
     )
     .all();
 
+  const paymentGatewayEnabled = process.env.PAYMENT_GATEWAY_ENABLED === 'true';
   const gatewayConfigured = Boolean(
-    process.env.PAYMENT_GATEWAY_KEY_ID?.trim() && process.env.PAYMENT_GATEWAY_KEY_SECRET?.trim()
+    paymentGatewayEnabled &&
+      process.env.PAYMENT_GATEWAY_KEY_ID?.trim() &&
+      process.env.PAYMENT_GATEWAY_KEY_SECRET?.trim()
   );
 
   res.json({
@@ -889,11 +893,16 @@ app.post('/api/deposits', requireUserAuth, (req: AuthenticatedRequest, res: Resp
     res.status(400).json({ error: `Minimum recharge amount is ₹${minRecharge}.` });
     return;
   }
-  if (!['upi', 'bank', 'gateway'].includes(paymentMethod)) {
-    res.status(400).json({ error: 'Invalid payment method.' });
+  if (!['upi', 'bank'].includes(paymentMethod)) {
+    res.status(400).json({
+      error:
+        paymentMethod === 'gateway'
+          ? 'Online payment gateway is temporarily disabled. Please use UPI / Telegram-assisted deposit verification.'
+          : 'Invalid payment method.',
+    });
     return;
   }
-  if ((paymentMethod === 'upi' || paymentMethod === 'bank') && utrReference.length < 6) {
+  if (utrReference.length < 6) {
     res.status(400).json({ error: 'Enter a valid 6+ character UTR / bank transaction reference.' });
     return;
   }
@@ -953,11 +962,16 @@ app.post('/api/deposits', requireUserAuth, (req: AuthenticatedRequest, res: Resp
   });
 });
 
-// Signed Payment Gateway Webhook (Idempotent & HMAC Verified)
-app.post('/api/payments/webhook', (req: Request, res: Response) => {
+// Signed Payment Gateway Webhook (Optional — temporarily disabled unless configured & enabled)
+app.post('/api/payments/webhook', async (req: Request, res: Response) => {
+  const paymentGatewayEnabled = process.env.PAYMENT_GATEWAY_ENABLED === 'true';
   const webhookSecret = process.env.PAYMENT_GATEWAY_WEBHOOK_SECRET?.trim();
-  if (!webhookSecret) {
-    res.status(503).json({ error: 'Payment gateway webhook secret is not configured on the server.' });
+  if (!paymentGatewayEnabled || !webhookSecret) {
+    res.status(200).json({
+      ok: false,
+      disabled: true,
+      message: 'Payment gateway integration is temporarily disabled. Manual deposit verification is active.',
+    });
     return;
   }
   const signature = req.headers['x-gateway-signature'];
@@ -978,13 +992,44 @@ app.post('/api/payments/webhook', (req: Request, res: Response) => {
   }
 
   const depositRef = asCleanString(req.body?.depositRef, 64);
-  const status = req.body?.status === 'paid' ? 'approved' : 'rejected';
+  const status = req.body?.status === 'paid' ? 'paid' : 'rejected';
   if (!depositRef) {
     res.status(400).json({ error: 'Missing depositRef' });
     return;
   }
 
+  const rawSbUrl = (process.env.VITE_SUPABASE_URL?.trim() || '').replace(/^["']|["']$/g, '');
+  const sbUrl = /^[a-z0-9]{15,32}$/i.test(rawSbUrl)
+    ? `https://${rawSbUrl.toLowerCase()}.supabase.co`
+    : rawSbUrl;
+  const sbServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (sbUrl && sbServiceRoleKey) {
+    try {
+      const supabaseAdmin = createClient(sbUrl, sbServiceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data, error } = await supabaseAdmin.rpc('gateway_verify_deposit', {
+        p_deposit_ref: depositRef,
+        p_status: status,
+      });
+      if (error) {
+        if (error.message?.includes('Deposit not found')) {
+          res.status(404).json({ error: 'Deposit not found' });
+          return;
+        }
+        res.status(500).json({ error: 'Supabase webhook verification failed' });
+        return;
+      }
+      res.json({ ok: true, ...(typeof data === 'object' && data !== null ? data : {}) });
+      return;
+    } catch {
+      res.status(500).json({ error: 'Webhook processing error' });
+      return;
+    }
+  }
+
   try {
+    const legacyStatus = status === 'paid' ? 'approved' : 'rejected';
     const out = db.transaction(() => {
       const dep = db.prepare('SELECT * FROM deposits WHERE deposit_ref = ?').get(depositRef) as
         | { id: string; user_id: string; amount: number; status: string }
@@ -993,7 +1038,7 @@ app.post('/api/payments/webhook', (req: Request, res: Response) => {
       if (dep.status !== 'pending') return { alreadyProcessed: true, status: dep.status };
 
       const now = new Date().toISOString();
-      if (status === 'approved') {
+      if (legacyStatus === 'approved') {
         const profile = db
           .prepare('SELECT available_balance, total_recharge FROM profiles WHERE user_id = ?')
           .get(dep.user_id) as { available_balance: number; total_recharge: number };
@@ -1023,13 +1068,13 @@ app.post('/api/payments/webhook', (req: Request, res: Response) => {
       }
 
       db.prepare('UPDATE deposits SET status = ?, verified_by = ?, verified_at = ? WHERE id = ?').run(
-        status,
+        legacyStatus,
         'gateway_webhook',
         now,
         dep.id
       );
 
-      return { alreadyProcessed: false, status };
+      return { alreadyProcessed: false, status: legacyStatus };
     })();
 
     res.json({ ok: true, ...out });

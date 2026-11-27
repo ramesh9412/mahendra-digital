@@ -93,6 +93,7 @@ export interface BankAccount {
 export interface MeResponse {
   user: {
     id: string;
+    email?: string | null;
     countryCode: string;
     maskedPhone: string;
     phoneLast4: string;
@@ -113,6 +114,7 @@ export interface MeResponse {
   };
   activeOrdersCount: number;
   hasActivePlan: boolean;
+  hasWithdrawalPin?: boolean;
   unreadNotificationsCount: number;
   productPurchaseCounts: Record<string, number>;
   bankAccounts: BankAccount[];
@@ -164,7 +166,7 @@ export interface DepositRecord {
 export interface WithdrawalRecord {
   id: string;
   withdrawal_ref: string;
-  bank_snapshot_json: string;
+  bank_snapshot_json: string | Record<string, unknown>;
   gross_amount: number;
   fee_percent: number;
   fee_amount: number;

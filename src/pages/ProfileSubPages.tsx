@@ -10,7 +10,19 @@ import {
   Trash2,
 } from 'lucide-react';
 import { TelegramSupportButton } from '../components/TelegramSupport';
-import { apiRequest, formatDateShort, formatDateTime, formatINR } from '../lib/api';
+import { formatDateShort, formatDateTime, formatINR } from '../lib/api';
+import {
+  addBankAccount,
+  changeUserPassword,
+  claimDailyReturn,
+  deleteBankAccount,
+  fetchMyNotifications,
+  fetchMyOrders,
+  fetchMyTransactions,
+  fetchMyWithdrawals,
+  markNotificationsRead,
+  updateMyProfileName,
+} from '../lib/supabaseApi';
 import type {
   MainTab,
   MeResponse,
@@ -39,22 +51,24 @@ const SubPageHeader: React.FC<{ title: string; onBack: () => void }> = ({ title,
 );
 
 export const OrdersPage: React.FC<{
-  token: string;
+  refreshSignal?: number;
   onBack: () => void;
   onRefreshMe: () => Promise<void>;
-}> = ({ token, onBack, onRefreshMe }) => {
+}> = ({ refreshSignal = 0, onBack, onRefreshMe }) => {
   const [filter, setFilter] = useState<'all' | 'active' | 'completed' | 'cancelled'>('all');
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const loadOrders = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const res = await apiRequest<{ orders: OrderRecord[] }>(`/api/orders?status=${filter}`, {
-        token,
-      });
-      setOrders(res.orders);
+      const rows = await fetchMyOrders(filter);
+      setOrders(rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load orders.');
     } finally {
       setLoading(false);
     }
@@ -62,19 +76,17 @@ export const OrdersPage: React.FC<{
 
   useEffect(() => {
     loadOrders();
-  }, [filter, token]);
+  }, [filter, refreshSignal]);
 
   const handleSettleYield = async (orderId: string) => {
     setMessage(null);
+    setError(null);
     try {
-      const res = await apiRequest<{ credited: number; daysSettled: number }>(
-        `/api/orders/${orderId}/claim-yield`,
-        { method: 'POST', token }
-      );
+      const res = await claimDailyReturn(orderId);
       setMessage(`Settled ${res.daysSettled} day(s): +${formatINR(res.credited)} credited.`);
       await Promise.all([loadOrders(), onRefreshMe()]);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'No yield due yet.');
+      setError(err instanceof Error ? err.message : 'No yield due yet.');
     }
   };
 
@@ -102,6 +114,11 @@ export const OrdersPage: React.FC<{
         {message && (
           <div className="p-3 rounded-2xl bg-[#E7F7EE] border border-[#A6DEC0] text-xs font-semibold text-[#005B32]">
             {message}
+          </div>
+        )}
+        {error && (
+          <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+            {error}
           </div>
         )}
 
@@ -180,10 +197,9 @@ export const OrdersPage: React.FC<{
 
 export const BankCardPage: React.FC<{
   me: MeResponse;
-  token: string;
   onBack: () => void;
   onRefreshMe: () => Promise<void>;
-}> = ({ me, token, onBack, onRefreshMe }) => {
+}> = ({ me, onBack, onRefreshMe }) => {
   const [accountHolder, setAccountHolder] = useState('');
   const [bankName, setBankName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
@@ -197,10 +213,13 @@ export const BankCardPage: React.FC<{
     setError(null);
     setSaving(true);
     try {
-      await apiRequest('/api/bank-accounts', {
-        method: 'POST',
-        token,
-        body: { accountHolder, bankName, accountNumber, ifscCode, upiId },
+      await addBankAccount({
+        userId: me.user.id,
+        accountHolder,
+        bankName,
+        accountNumber,
+        ifscCode,
+        upiId,
       });
       setAccountHolder('');
       setBankName('');
@@ -216,8 +235,13 @@ export const BankCardPage: React.FC<{
   };
 
   const handleDelete = async (id: string) => {
-    await apiRequest(`/api/bank-accounts/${id}`, { method: 'DELETE', token });
-    await onRefreshMe();
+    setError(null);
+    try {
+      await deleteBankAccount(id);
+      await onRefreshMe();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to remove bank card.');
+    }
   };
 
   return (
@@ -306,7 +330,7 @@ export const BankCardPage: React.FC<{
           <button
             type="submit"
             disabled={saving}
-            className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer"
+            className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer disabled:opacity-60"
           >
             {saving ? 'Saving...' : 'Save Bank Account'}
           </button>
@@ -318,23 +342,26 @@ export const BankCardPage: React.FC<{
 
 export const PersonalInfoPage: React.FC<{
   me: MeResponse;
-  token: string;
   onBack: () => void;
   onRefreshMe: () => Promise<void>;
-}> = ({ me, token, onBack, onRefreshMe }) => {
+}> = ({ me, onBack, onRefreshMe }) => {
   const [username, setUsername] = useState(me.profile.username);
-  const [kind, setKind] = useState<'login' | 'withdrawal'>('login');
+  const [kind, setKind] = useState<'login' | 'withdrawal'>(
+    me.hasWithdrawalPin === false ? 'withdrawal' : 'login'
+  );
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const needsInitialPin = kind === 'withdrawal' && me.hasWithdrawalPin === false;
 
   const handleSaveName = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
     setErr(null);
     try {
-      await apiRequest('/api/me/profile', { method: 'PATCH', token, body: { username } });
+      await updateMyProfileName(me.user.id, username);
       await onRefreshMe();
       setMsg('Profile updated.');
     } catch (error) {
@@ -347,14 +374,18 @@ export const PersonalInfoPage: React.FC<{
     setMsg(null);
     setErr(null);
     try {
-      const res = await apiRequest<{ message: string }>('/api/me/change-password', {
-        method: 'POST',
-        token,
-        body: { kind, currentPassword, newPassword },
+      const responseMsg = await changeUserPassword({
+        email: me.user.email || '',
+        kind,
+        currentPassword: needsInitialPin ? '' : currentPassword,
+        newPassword,
       });
-      setMsg(res.message);
+      setMsg(responseMsg);
       setCurrentPassword('');
       setNewPassword('');
+      if (kind === 'withdrawal') {
+        await onRefreshMe();
+      }
     } catch (error) {
       setErr(error instanceof Error ? error.message : 'Password change failed.');
     }
@@ -378,6 +409,7 @@ export const PersonalInfoPage: React.FC<{
         <form onSubmit={handleSaveName} className="bg-white rounded-[24px] card-mint-border p-4 sm:p-5 space-y-3">
           <h2 className="font-display font-bold text-base text-[#17231C]">Account Details</h2>
           <div className="text-xs text-[#6B8275]">
+            {me.user.email ? `Email: ${me.user.email} · ` : ''}
             Mobile: {me.user.countryCode} {me.user.maskedPhone} · Invite Code: {me.user.referralCode}
           </div>
           <input
@@ -401,7 +433,11 @@ export const PersonalInfoPage: React.FC<{
               <button
                 key={k}
                 type="button"
-                onClick={() => setKind(k)}
+                onClick={() => {
+                  setKind(k);
+                  setErr(null);
+                  setMsg(null);
+                }}
                 className={`py-2 rounded-lg text-xs font-bold capitalize cursor-pointer ${
                   kind === k ? 'brand-gradient text-white' : 'text-[#4C6356]'
                 }`}
@@ -410,27 +446,39 @@ export const PersonalInfoPage: React.FC<{
               </button>
             ))}
           </div>
-          <input
-            type="password"
-            required
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            placeholder={`Current ${kind} password`}
-            className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
-          />
+
+          {needsInitialPin ? (
+            <div className="p-2.5 rounded-xl bg-[#FFF9E6] border border-[#F3D88C] text-[11px] font-semibold text-[#6E4B00]">
+              Set your 4+ character Withdrawal Password for authorizing future payouts.
+            </div>
+          ) : (
+            <input
+              type="password"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder={`Current ${kind} password`}
+              className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
+            />
+          )}
+
           <input
             type="password"
             required
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
-            placeholder={`New ${kind} password`}
+            placeholder={
+              needsInitialPin ? 'Create withdrawal password (4+ chars)' : `New ${kind} password`
+            }
             className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
           />
           <button
             type="submit"
             className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer"
           >
-            Update {kind === 'login' ? 'Login' : 'Withdrawal'} Password
+            {needsInitialPin
+              ? 'Set Withdrawal Password'
+              : `Update ${kind === 'login' ? 'Login' : 'Withdrawal'} Password`}
           </button>
         </form>
       </div>
@@ -438,18 +486,27 @@ export const PersonalInfoPage: React.FC<{
   );
 };
 
-export const BalanceDetailsPage: React.FC<{ token: string; onBack: () => void }> = ({
-  token,
-  onBack,
-}) => {
+export const BalanceDetailsPage: React.FC<{
+  refreshSignal?: number;
+  onBack: () => void;
+}> = ({ refreshSignal = 0, onBack }) => {
   const [filter, setFilter] = useState<'all' | 'credit' | 'debit'>('all');
   const [txs, setTxs] = useState<TransactionRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiRequest<{ transactions: TransactionRecord[] }>(`/api/transactions?type=${filter}`, { token })
-      .then((res) => setTxs(res.transactions))
-      .catch(() => {});
-  }, [filter, token]);
+    setLoading(true);
+    setError(null);
+    fetchMyTransactions(filter)
+      .then(setTxs)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to load transactions.');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [filter, refreshSignal]);
 
   return (
     <div className="pb-24 lg:pb-10">
@@ -470,8 +527,16 @@ export const BalanceDetailsPage: React.FC<{ token: string; onBack: () => void }>
           ))}
         </div>
 
+        {error && (
+          <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+            {error}
+          </div>
+        )}
+
         <div className="bg-white rounded-[24px] card-mint-border divide-y divide-[#EDF7F1]">
-          {txs.length === 0 ? (
+          {loading ? (
+            <div className="p-8 text-center text-xs text-[#6B8275]">Loading transactions...</div>
+          ) : txs.length === 0 ? (
             <div className="p-8 text-center text-xs text-[#6B8275]">No ledger entries yet.</div>
           ) : (
             txs.map((tx) => (
@@ -522,17 +587,26 @@ export const BalanceDetailsPage: React.FC<{ token: string; onBack: () => void }>
 };
 
 export const WithdrawalDetailsPage: React.FC<{
-  token: string;
+  refreshSignal?: number;
   onBack: () => void;
   onNavigate: (tab: MainTab) => void;
-}> = ({ token, onBack, onNavigate }) => {
+}> = ({ refreshSignal = 0, onBack, onNavigate }) => {
   const [items, setItems] = useState<WithdrawalRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiRequest<{ withdrawals: WithdrawalRecord[] }>('/api/withdrawals', { token })
-      .then((res) => setItems(res.withdrawals))
-      .catch(() => {});
-  }, [token]);
+    setLoading(true);
+    setError(null);
+    fetchMyWithdrawals()
+      .then(setItems)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to load withdrawal history.');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [refreshSignal]);
 
   return (
     <div className="pb-24 lg:pb-10">
@@ -546,23 +620,41 @@ export const WithdrawalDetailsPage: React.FC<{
           New Withdrawal Request
         </button>
 
+        {error && (
+          <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+            {error}
+          </div>
+        )}
+
         <div className="bg-white rounded-[24px] card-mint-border divide-y divide-[#EDF7F1]">
-          {items.length === 0 ? (
+          {loading ? (
+            <div className="p-8 text-center text-xs text-[#6B8275]">Loading withdrawal records...</div>
+          ) : items.length === 0 ? (
             <div className="p-8 text-center text-xs text-[#6B8275]">No withdrawal records yet.</div>
           ) : (
             items.map((w) => {
-              const bank = (() => {
-                try {
-                  return JSON.parse(w.bank_snapshot_json);
-                } catch {
-                  return {};
+              const bank: { bank_name?: string; account_number_masked?: string } = (() => {
+                if (typeof w.bank_snapshot_json === 'object' && w.bank_snapshot_json !== null) {
+                  return w.bank_snapshot_json;
                 }
+                if (typeof w.bank_snapshot_json === 'string') {
+                  try {
+                    return JSON.parse(w.bank_snapshot_json) as {
+                      bank_name?: string;
+                      account_number_masked?: string;
+                    };
+                  } catch {
+                    return {};
+                  }
+                }
+                return {};
               })();
               return (
                 <div key={w.id} className="p-4 flex items-center justify-between gap-3">
                   <div>
                     <div className="font-mono-num font-bold text-xs text-[#17231C]">
-                      {w.withdrawal_ref} · {bank.bank_name ?? 'Bank'} ({bank.account_number_masked ?? '****'})
+                      {w.withdrawal_ref} · {bank.bank_name ?? 'Bank'} (
+                      {bank.account_number_masked ?? '****'})
                     </div>
                     <div className="text-[11px] text-[#6B8275] mt-0.5">
                       {formatDateTime(w.created_at)} · Fee {formatINR(w.fee_amount)} · Net{' '}
@@ -596,25 +688,45 @@ export const WithdrawalDetailsPage: React.FC<{
 };
 
 export const NotificationsPage: React.FC<{
-  token: string;
+  refreshSignal?: number;
   onBack: () => void;
   onRefreshMe: () => Promise<void>;
-}> = ({ token, onBack, onRefreshMe }) => {
+}> = ({ refreshSignal = 0, onBack, onRefreshMe }) => {
   const [items, setItems] = useState<NotificationRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiRequest<{ notifications: NotificationRecord[] }>('/api/notifications', { token })
-      .then((res) => setItems(res.notifications))
-      .then(() => apiRequest('/api/notifications/read-all', { method: 'POST', token }))
-      .then(() => onRefreshMe())
-      .catch(() => {});
-  }, [token]);
+    setLoading(true);
+    setError(null);
+    fetchMyNotifications()
+      .then(async (list) => {
+        setItems(list);
+        await markNotificationsRead().catch(() => {});
+        await onRefreshMe().catch(() => {});
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to load notifications.');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [refreshSignal]);
 
   return (
     <div className="pb-24 lg:pb-10">
       <SubPageHeader title="Notification Center" onBack={onBack} />
       <div className="max-w-3xl mx-auto px-3.5 sm:px-6 mt-4 space-y-3">
-        {items.length === 0 ? (
+        {error && (
+          <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+            {error}
+          </div>
+        )}
+        {loading ? (
+          <div className="bg-white rounded-2xl card-mint-border p-8 text-center text-xs text-[#6B8275]">
+            Loading notifications...
+          </div>
+        ) : items.length === 0 ? (
           <div className="bg-white rounded-2xl card-mint-border p-8 text-center text-xs text-[#6B8275]">
             No notifications yet.
           </div>

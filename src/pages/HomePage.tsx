@@ -14,7 +14,8 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { apiRequest, formatINR } from '../lib/api';
+import { formatINR } from '../lib/api';
+import { createInvestmentOrder } from '../lib/supabaseApi';
 import type { BannerItem, MainTab, MeResponse, ProductItem, SiteSettings } from '../types';
 import { HeroPromotionalBanner } from '../components/BrandVisuals';
 import { PlanIcon } from '../components/PlanIcons';
@@ -25,9 +26,15 @@ interface HomePageProps {
   banners: BannerItem[];
   products: ProductItem[];
   me: MeResponse;
-  token: string;
   onNavigate: (tab: MainTab) => void;
   onRefreshMe: () => Promise<void>;
+}
+
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `INV-${crypto.randomUUID()}`;
+  }
+  return `INV-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export const HomePage: React.FC<HomePageProps> = ({
@@ -35,12 +42,12 @@ export const HomePage: React.FC<HomePageProps> = ({
   banners,
   products,
   me,
-  token,
   onNavigate,
   onRefreshMe,
 }) => {
   const [selectedProduct, setSelectedProduct] = useState<ProductItem | null>(null);
   const [detailProduct, setDetailProduct] = useState<ProductItem | null>(null);
+  const [orderIdempotencyKey, setOrderIdempotencyKey] = useState<string>(generateIdempotencyKey);
   const [acceptedDisclosure, setAcceptedDisclosure] = useState(true);
   const [purchasing, setPurchasing] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
@@ -57,18 +64,22 @@ export const HomePage: React.FC<HomePageProps> = ({
     sort_order: 1,
   };
 
+  const openPurchaseModal = (product: ProductItem) => {
+    setSelectedProduct(product);
+    setOrderIdempotencyKey(generateIdempotencyKey());
+    setPurchaseError(null);
+    setAcceptedDisclosure(true);
+  };
+
   const handleConfirmPurchase = async () => {
     if (!selectedProduct) return;
     setPurchasing(true);
     setPurchaseError(null);
     try {
-      const res = await apiRequest<{ orderNumber: string }>('/api/orders', {
-        method: 'POST',
-        token,
-        body: {
-          productId: selectedProduct.id,
-          acceptedDisclosure,
-        },
+      const res = await createInvestmentOrder({
+        planId: selectedProduct.id,
+        idempotencyKey: orderIdempotencyKey,
+        acceptedDisclosure,
       });
       await onRefreshMe();
       setPurchaseSuccess(
@@ -321,11 +332,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedProduct(product);
-                        setPurchaseError(null);
-                        setAcceptedDisclosure(true);
-                      }}
+                      onClick={() => openPurchaseModal(product)}
                       className="col-span-3 h-10 rounded-full luxury-gold-btn font-display font-extrabold text-xs sm:text-sm tracking-wide flex items-center justify-center gap-1.5 active:scale-[0.98] transition cursor-pointer"
                     >
                       <ShoppingCart className="w-4 h-4" />
@@ -423,9 +430,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 onClick={() => {
                   const p = detailProduct;
                   setDetailProduct(null);
-                  setSelectedProduct(p);
-                  setPurchaseError(null);
-                  setAcceptedDisclosure(true);
+                  openPurchaseModal(p);
                 }}
                 className="flex-[2] h-11 rounded-full luxury-gold-btn font-display font-extrabold text-sm disabled:opacity-50 cursor-pointer"
               >
@@ -589,7 +594,6 @@ export const HomePage: React.FC<HomePageProps> = ({
           </div>
         </div>
       )}
-
     </div>
   );
 };

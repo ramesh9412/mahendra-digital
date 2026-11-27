@@ -11,26 +11,36 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { apiRequest, formatDateShort, formatINR } from '../lib/api';
+import { formatDateShort, formatINR } from '../lib/api';
+import { fetchMyTeam } from '../lib/supabaseApi';
 import type { MainTab, MeResponse, TeamResponse } from '../types';
 
 interface TeamPageProps {
   me: MeResponse;
-  token: string;
+  refreshSignal?: number;
   onNavigate: (tab: MainTab) => void;
 }
 
-export const TeamPage: React.FC<TeamPageProps> = ({ me, token, onNavigate }) => {
+export const TeamPage: React.FC<TeamPageProps> = ({ me, refreshSignal = 0, onNavigate }) => {
   const [team, setTeam] = useState<TeamResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeLevel, setActiveLevel] = useState<1 | 2 | 3>(1);
   const [copied, setCopied] = useState(false);
   const [showMembersModal, setShowMembersModal] = useState(false);
 
   useEffect(() => {
-    apiRequest<TeamResponse>('/api/team', { token })
+    setLoading(true);
+    setError(null);
+    fetchMyTeam()
       .then(setTeam)
-      .catch(() => {});
-  }, [token]);
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to load team details.');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [me.user.id, refreshSignal]);
 
   const currentLevel = team?.levels.find((l) => l.level === activeLevel);
 
@@ -92,6 +102,16 @@ export const TeamPage: React.FC<TeamPageProps> = ({ me, token, onNavigate }) => 
 
       {/* Main Content */}
       <div className="max-w-3xl mx-auto px-3.5 sm:px-6 mt-4 space-y-3.5">
+        {error && (
+          <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+            {error}
+          </div>
+        )}
+        {loading && !team && (
+          <div className="p-3.5 rounded-2xl bg-white card-mint-border text-xs font-semibold text-[#6B8275] text-center">
+            Loading team data...
+          </div>
+        )}
         {/* Level Tabs */}
         <div className="grid grid-cols-3 gap-2 p-1 rounded-2xl bg-[#E7F7EE] border border-[#D0ECDC]">
           {([1, 2, 3] as const).map((lvl) => (

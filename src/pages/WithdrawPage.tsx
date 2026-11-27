@@ -7,18 +7,25 @@ import {
   KeyRound,
   Wallet,
 } from 'lucide-react';
-import { apiRequest, formatDateTime, formatINR } from '../lib/api';
+import { formatDateTime, formatINR } from '../lib/api';
+import { fetchMyWithdrawals, submitWithdrawalRequest } from '../lib/supabaseApi';
 import type { MainTab, MeResponse, SiteSettings, WithdrawalRecord } from '../types';
 
-// Local rounding helper
 function calcMoney(val: number): number {
   return Math.round(val * 100) / 100;
+}
+
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `WDR-${crypto.randomUUID()}`;
+  }
+  return `WDR-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 interface WithdrawPageProps {
   me: MeResponse;
   settings: SiteSettings;
-  token: string;
+  refreshSignal?: number;
   onNavigate: (tab: MainTab) => void;
   onRefreshMe: () => Promise<void>;
 }
@@ -26,7 +33,7 @@ interface WithdrawPageProps {
 export const WithdrawPage: React.FC<WithdrawPageProps> = ({
   me,
   settings,
-  token,
+  refreshSignal = 0,
   onNavigate,
   onRefreshMe,
 }) => {
@@ -34,6 +41,8 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
   const [selectedBankId, setSelectedBankId] = useState(me.bankAccounts[0]?.id ?? '');
   const [withdrawalPassword, setWithdrawalPassword] = useState('');
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
+  const [withdrawalsLoading, setWithdrawalsLoading] = useState(true);
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(generateIdempotencyKey);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -45,19 +54,20 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
   }, [me.bankAccounts, selectedBankId]);
 
   const loadWithdrawals = async () => {
+    setWithdrawalsLoading(true);
     try {
-      const res = await apiRequest<{ withdrawals: WithdrawalRecord[] }>('/api/withdrawals', {
-        token,
-      });
-      setWithdrawals(res.withdrawals);
-    } catch {
-      // ignore
+      const rows = await fetchMyWithdrawals();
+      setWithdrawals(rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load withdrawal history.');
+    } finally {
+      setWithdrawalsLoading(false);
     }
   };
 
   useEffect(() => {
     loadWithdrawals();
-  }, [token]);
+  }, [me.user.id, refreshSignal]);
 
   const available = me.profile.availableBalance;
   const grossAmount = Math.max(0, Number(amountStr) || 0);
@@ -74,23 +84,32 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
     e.preventDefault();
     setError(null);
     setSuccess(null);
-    setSubmitting(true);
 
+    if (grossAmount < settings.minWithdraw || grossAmount > settings.maxWithdraw) {
+      setError(
+        `Withdrawal amount must be between ${formatINR(settings.minWithdraw)} and ${formatINR(settings.maxWithdraw)}.`
+      );
+      return;
+    }
+    if (grossAmount > available) {
+      setError('Insufficient withdrawable balance.');
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      const res = await apiRequest<{ withdrawalRef: string; netAmount: number }>('/api/withdrawals', {
-        method: 'POST',
-        token,
-        body: {
-          amount: grossAmount,
-          bankAccountId: selectedBankId,
-          withdrawalPassword,
-        },
+      const res = await submitWithdrawalRequest({
+        amount: grossAmount,
+        bankAccountId: selectedBankId,
+        withdrawalPassword,
+        idempotencyKey,
       });
       setSuccess(
         `Withdrawal ${res.withdrawalRef} submitted (Net payout ${formatINR(res.netAmount)}). Status: Pending.`
       );
       setAmountStr('0');
       setWithdrawalPassword('');
+      setIdempotencyKey(generateIdempotencyKey());
       await Promise.all([loadWithdrawals(), onRefreshMe()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to submit withdrawal.');
@@ -290,9 +309,20 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
 
             {/* Withdrawal Password */}
             <div className="mt-4">
-              <label className="block text-xs font-bold text-[#17231C] mb-1.5">
-                Withdrawal Password
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-[#17231C]">
+                  Withdrawal Password
+                </label>
+                {me.hasWithdrawalPin === false && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('personal-info')}
+                    className="text-[11px] font-bold text-[#008C45] hover:underline cursor-pointer"
+                  >
+                    Set PIN first →
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-2 px-3.5 h-11 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0]">
                 <KeyRound className="w-4 h-4 text-[#008C45] shrink-0" />
                 <input
@@ -337,7 +367,9 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
             <h2 className="font-display font-bold text-sm text-[#17231C] mb-3">
               Withdrawal History
             </h2>
-            {withdrawals.length === 0 ? (
+            {withdrawalsLoading && withdrawals.length === 0 ? (
+              <p className="text-xs text-[#6B8275] py-4 text-center">Loading withdrawal requests...</p>
+            ) : withdrawals.length === 0 ? (
               <p className="text-xs text-[#6B8275] py-4 text-center">No withdrawal requests yet.</p>
             ) : (
               <div className="divide-y divide-[#EDF7F1]">

@@ -12,13 +12,14 @@ import {
   TELEGRAM_SUPPORT_USERNAME,
   TelegramSupportButton,
 } from '../components/TelegramSupport';
-import { apiRequest, formatDateTime, formatINR } from '../lib/api';
+import { formatDateTime, formatINR } from '../lib/api';
+import { fetchMyDeposits, submitDepositRequest } from '../lib/supabaseApi';
 import type { DepositRecord, MainTab, MeResponse, SiteSettings } from '../types';
 
 interface RechargePageProps {
   me: MeResponse;
   settings: SiteSettings;
-  token: string;
+  refreshSignal?: number;
   onNavigate: (tab: MainTab) => void;
   onRefreshMe: () => Promise<void>;
 }
@@ -35,32 +36,36 @@ const QUICK_AMOUNTS = [
 export const RechargePage: React.FC<RechargePageProps> = ({
   me,
   settings,
-  token,
+  refreshSignal = 0,
   onNavigate,
   onRefreshMe,
 }) => {
   const [amountStr, setAmountStr] = useState(String(settings.minRecharge || 800));
-  const paymentMethod: 'upi' | 'bank' | 'gateway' = 'upi';
+  const paymentMethod: 'upi' | 'bank' = 'upi';
   const [utrReference, setUtrReference] = useState('');
   const [showCheckoutStep, setShowCheckoutStep] = useState(false);
   const [deposits, setDeposits] = useState<DepositRecord[]>([]);
+  const [depositsLoading, setDepositsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(() => `IDEMP-${Date.now()}`);
 
   const loadDeposits = async () => {
+    setDepositsLoading(true);
     try {
-      const res = await apiRequest<{ deposits: DepositRecord[] }>('/api/deposits', { token });
-      setDeposits(res.deposits);
-    } catch {
-      // ignore
+      const rows = await fetchMyDeposits();
+      setDeposits(rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load deposit history.');
+    } finally {
+      setDepositsLoading(false);
     }
   };
 
   useEffect(() => {
     loadDeposits();
-  }, [token]);
+  }, [me.user.id, refreshSignal]);
 
   const numericAmount = Number(amountStr) || 0;
 
@@ -71,7 +76,11 @@ export const RechargePage: React.FC<RechargePageProps> = ({
       setError(`Minimum recharge amount is ${formatINR(settings.minRecharge)}.`);
       return;
     }
-    setIdempotencyKey(`IDEMP-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    const uniqueKey =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `DEP-${crypto.randomUUID()}`
+        : `IDEMP-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setIdempotencyKey(uniqueKey);
     setShowCheckoutStep(true);
   };
 
@@ -81,18 +90,14 @@ export const RechargePage: React.FC<RechargePageProps> = ({
     setSubmitting(true);
 
     try {
-      const res = await apiRequest<{ deposit: DepositRecord; message: string }>('/api/deposits', {
-        method: 'POST',
-        token,
-        body: {
-          amount: numericAmount,
-          paymentMethod,
-          utrReference,
-          idempotencyKey,
-        },
+      const res = await submitDepositRequest({
+        amount: numericAmount,
+        paymentMethod,
+        utrReference,
+        idempotencyKey,
       });
       setSuccess(
-        `Request ${res.deposit.deposit_ref} submitted (${res.deposit.status}). ${res.message}`
+        `Request ${res.deposit.deposit_ref} submitted (${res.deposit.status}). ${res.message || 'Pending server-side verification.'}`
       );
       setUtrReference('');
       setShowCheckoutStep(false);
@@ -296,27 +301,27 @@ export const RechargePage: React.FC<RechargePageProps> = ({
 
             <TelegramSupportButton label="CONTACT SUPPORT ON TELEGRAM" />
 
-                <div>
-                  <label className="block text-xs font-bold text-[#17231C] mb-1">
-                    Enter Payment Reference / UTR Number
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={utrReference}
-                    onChange={(e) => setUtrReference(e.target.value)}
-                    placeholder="e.g., 432198765432"
-                    className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm font-mono-num text-[#17231C] focus:outline-none focus:border-[#008C45]"
-                  />
-                </div>
+            <div>
+              <label className="block text-xs font-bold text-[#17231C] mb-1">
+                Enter Payment Reference / UTR Number
+              </label>
+              <input
+                type="text"
+                required
+                value={utrReference}
+                onChange={(e) => setUtrReference(e.target.value)}
+                placeholder="e.g., 432198765432"
+                className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm font-mono-num text-[#17231C] focus:outline-none focus:border-[#008C45]"
+              />
+            </div>
 
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm shadow-md cursor-pointer disabled:opacity-60"
-                >
-                  {submitting ? 'Submitting...' : 'Submit Deposit for Verification'}
-                </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm shadow-md cursor-pointer disabled:opacity-60"
+            >
+              {submitting ? 'Submitting...' : 'Submit Deposit for Verification'}
+            </button>
           </form>
         )}
 
@@ -346,7 +351,9 @@ export const RechargePage: React.FC<RechargePageProps> = ({
         {/* Recharge History */}
         <div className="bg-white rounded-[24px] card-mint-border p-4 sm:p-5">
           <h2 className="font-display font-bold text-sm text-[#17231C] mb-3">Recharge History</h2>
-          {deposits.length === 0 ? (
+          {depositsLoading && deposits.length === 0 ? (
+            <p className="text-xs text-[#6B8275] py-4 text-center">Loading deposit requests...</p>
+          ) : deposits.length === 0 ? (
             <p className="text-xs text-[#6B8275] py-4 text-center">No deposit requests yet.</p>
           ) : (
             <div className="divide-y divide-[#EDF7F1]">

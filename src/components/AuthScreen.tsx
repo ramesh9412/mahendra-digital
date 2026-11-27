@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   Eye,
@@ -6,21 +6,27 @@ import {
   Globe,
   KeyRound,
   Lock,
+  Mail,
   Phone,
-  ShieldCheck,
   UserPlus,
   X,
 } from 'lucide-react';
-import { apiRequest } from '../lib/api';
+import {
+  sendPasswordResetEmail,
+  signInWithSupabase,
+  signUpWithSupabase,
+  updateSupabasePassword,
+} from '../lib/supabaseApi';
 import type { SiteSettings } from '../types';
 import { HeroPromotionalBanner } from './BrandVisuals';
 import { TELEGRAM_SUPPORT_URL, TELEGRAM_SUPPORT_USERNAME } from './TelegramSupport';
 
 interface AuthScreenProps {
   settings: SiteSettings;
-  initialMode?: 'login' | 'register';
+  initialMode?: 'login' | 'register' | 'recovery';
   initialReferralCode?: string;
-  onAuthenticated: (token: string) => void;
+  onAuthenticated: () => void;
+  onRecoveryCompleted?: () => void;
   onOpenAdmin: () => void;
 }
 
@@ -32,10 +38,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   initialMode = 'login',
   initialReferralCode = '',
   onAuthenticated,
+  onRecoveryCompleted,
   onOpenAdmin,
 }) => {
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'recovery'>(initialMode);
   const [language, setLanguage] = useState<string>(settings.defaultLanguage || 'ENG');
+  const [email, setEmail] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -53,46 +61,91 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [success, setSuccess] = useState<string | null>(null);
   const [showTermsModal, setShowTermsModal] = useState(false);
 
+  useEffect(() => {
+    if (initialMode === 'recovery') {
+      setMode('recovery');
+      setError(null);
+      setSuccess('Verify your new login password below to complete account recovery.');
+    }
+  }, [initialMode]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
-    setLoading(true);
 
+    if ((mode === 'login' || mode === 'register') && !acceptedTerms) {
+      setError('Please accept the Terms & Conditions to continue.');
+      return;
+    }
+
+    if (mode === 'register') {
+      const cleanPhone = phone.replace(/\D/g, '');
+      if (cleanPhone.length < 7 || cleanPhone.length > 15) {
+        setError('Enter a valid mobile number (7 to 15 digits).');
+        return;
+      }
+      if (password.length < 6) {
+        setError('Login password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Login passwords do not match.');
+        return;
+      }
+      if (withdrawalPassword.length < 4) {
+        setError('Withdrawal password must be at least 4 characters.');
+        return;
+      }
+    }
+
+    if (mode === 'recovery') {
+      if (password.length < 6) {
+        setError('New password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
+      }
+    }
+
+    setLoading(true);
     try {
       if (mode === 'login') {
-        const res = await apiRequest<{ token: string }>('/api/auth/login', {
-          method: 'POST',
-          body: { countryCode, phone, password, acceptedTerms },
-        });
-        onAuthenticated(res.token);
+        await signInWithSupabase(email, password);
+        onAuthenticated();
       } else if (mode === 'register') {
-        const res = await apiRequest<{ token: string }>('/api/auth/register', {
-          method: 'POST',
-          body: {
-            countryCode,
-            phone,
-            password,
-            confirmPassword,
-            withdrawalPassword,
-            invitationCode,
-            acceptedTerms,
-          },
+        const res = await signUpWithSupabase({
+          email,
+          countryCode,
+          phone,
+          password,
+          withdrawalPassword,
+          invitationCode,
         });
-        onAuthenticated(res.token);
-      } else {
-        const res = await apiRequest<{ message: string }>('/api/auth/forgot-password', {
-          method: 'POST',
-          body: {
-            phone,
-            withdrawalPassword,
-            newPassword: password,
-          },
-        });
-        setSuccess(res.message);
+        if (res.hasSession) {
+          onAuthenticated();
+        } else if (res.needsEmailConfirmation) {
+          setSuccess(
+            'Account created! Please check your email inbox to confirm your address, then sign in.'
+          );
+          setPassword('');
+          setConfirmPassword('');
+          setMode('login');
+        }
+      } else if (mode === 'forgot') {
+        await sendPasswordResetEmail(email);
+        setSuccess(
+          'Password reset link sent! Check your email inbox and open the link to set a new password.'
+        );
+      } else if (mode === 'recovery') {
+        await updateSupabasePassword(password);
+        setSuccess('Your login password has been updated.');
         setPassword('');
-        setWithdrawalPassword('');
-        setMode('login');
+        setConfirmPassword('');
+        onRecoveryCompleted?.();
+        onAuthenticated();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed.');
@@ -132,41 +185,49 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           {/* Header Row: Title + Segmented Sign In / Sign Up */}
           <div className="flex items-center justify-between gap-3 mb-5">
             <h2 className="font-display font-extrabold text-2xl text-[#007A3D] tracking-tight">
-              {mode === 'login' ? 'Login' : mode === 'register' ? 'Register' : 'Reset Password'}
+              {mode === 'login'
+                ? 'Login'
+                : mode === 'register'
+                  ? 'Register'
+                  : mode === 'forgot'
+                    ? 'Forgot Password'
+                    : 'Set New Password'}
             </h2>
 
-            <div className="inline-flex items-center p-1 rounded-full bg-[#E7F7EE] border border-[#CCEAD9]">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('login');
-                  setError(null);
-                  setSuccess(null);
-                }}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap cursor-pointer ${
-                  mode === 'login'
-                    ? 'brand-gradient text-white shadow-sm'
-                    : 'text-[#446151] hover:text-[#005B32]'
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('register');
-                  setError(null);
-                  setSuccess(null);
-                }}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap cursor-pointer ${
-                  mode === 'register'
-                    ? 'brand-gradient text-white shadow-sm'
-                    : 'text-[#446151] hover:text-[#005B32]'
-                }`}
-              >
-                Sign Up
-              </button>
-            </div>
+            {mode !== 'recovery' && (
+              <div className="inline-flex items-center p-1 rounded-full bg-[#E7F7EE] border border-[#CCEAD9]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError(null);
+                    setSuccess(null);
+                  }}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                    mode === 'login'
+                      ? 'brand-gradient text-white shadow-sm'
+                      : 'text-[#446151] hover:text-[#005B32]'
+                  }`}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                    setSuccess(null);
+                  }}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                    mode === 'register'
+                      ? 'brand-gradient text-white shadow-sm'
+                      : 'text-[#446151] hover:text-[#005B32]'
+                  }`}
+                >
+                  Sign Up
+                </button>
+              </div>
+            )}
           </div>
 
           {error && (
@@ -182,103 +243,105 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           )}
 
           <form onSubmit={handleSubmit} className="space-y-3.5">
-            {/* Phone Number with Country Code Selector */}
-            <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-              <Phone className="w-4 h-4 text-[#008C45] shrink-0" />
-              <select
-                aria-label="Country code"
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value)}
-                className="bg-transparent text-sm font-bold text-[#17231C] pr-1.5 border-r border-[#CBE4D5] focus:outline-none cursor-pointer"
-              >
-                {COUNTRY_CODES.map((cc) => (
-                  <option key={cc} value={cc}>
-                    {cc}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="tel"
-                inputMode="numeric"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/[^\d]/g, '').slice(0, 15))}
-                placeholder="Enter Phone Number"
-                required
-                className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
-              />
-            </div>
-
-            {mode === 'forgot' && (
+            {/* Email Address (for Login, Register, Forgot Password) */}
+            {mode !== 'recovery' && (
               <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-                <ShieldCheck className="w-4 h-4 text-[#008C45] shrink-0" />
+                <Mail className="w-4 h-4 text-[#008C45] shrink-0" />
                 <input
-                  type={showWithdrawPass ? 'text' : 'password'}
-                  value={withdrawalPassword}
-                  onChange={(e) => setWithdrawalPassword(e.target.value)}
-                  placeholder="Verify Withdrawal Password"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter Email Address"
+                  required
+                  className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
+                />
+              </div>
+            )}
+
+            {/* Mobile Number with Country Code Selector (Register) */}
+            {mode === 'register' && (
+              <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
+                <Phone className="w-4 h-4 text-[#008C45] shrink-0" />
+                <select
+                  aria-label="Country code"
+                  value={countryCode}
+                  onChange={(e) => setCountryCode(e.target.value)}
+                  className="bg-transparent text-sm font-bold text-[#17231C] pr-1.5 border-r border-[#CBE4D5] focus:outline-none cursor-pointer"
+                >
+                  {COUNTRY_CODES.map((cc) => (
+                    <option key={cc} value={cc}>
+                      {cc}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value.replace(/[^\d]/g, '').slice(0, 15))}
+                  placeholder="Enter Phone Number"
+                  required
+                  className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
+                />
+              </div>
+            )}
+
+            {/* Password (Login, Register, Recovery) */}
+            {mode !== 'forgot' && (
+              <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
+                <Lock className="w-4 h-4 text-[#008C45] shrink-0" />
+                <input
+                  type={showPass ? 'text' : 'password'}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={
+                    mode === 'login'
+                      ? 'Enter your password'
+                      : mode === 'register'
+                        ? 'Create New Password (6+ chars)'
+                        : 'Enter New Login Password (6+ chars)'
+                  }
                   required
                   className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowWithdrawPass((v) => !v)}
-                  aria-label="Toggle withdrawal password visibility"
+                  onClick={() => setShowPass((v) => !v)}
+                  aria-label="Toggle password visibility"
                   className="text-[#5E8C72] hover:text-[#005B32] p-1 cursor-pointer"
                 >
-                  {showWithdrawPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             )}
 
-            {/* Password */}
-            <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-              <Lock className="w-4 h-4 text-[#008C45] shrink-0" />
-              <input
-                type={showPass ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={
-                  mode === 'login'
-                    ? 'Enter your password'
-                    : mode === 'register'
-                      ? 'Create New Password (6+ chars)'
-                      : 'Enter New Login Password'
-                }
-                required
-                className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPass((v) => !v)}
-                aria-label="Toggle password visibility"
-                className="text-[#5E8C72] hover:text-[#005B32] p-1 cursor-pointer"
-              >
-                {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
+            {(mode === 'register' || mode === 'recovery') && (
+              <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
+                <Lock className="w-4 h-4 text-[#008C45] shrink-0" />
+                <input
+                  type={showConfirm ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm New Password"
+                  required
+                  className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirm((v) => !v)}
+                  aria-label="Toggle confirm password visibility"
+                  className="text-[#5E8C72] hover:text-[#005B32] p-1 cursor-pointer"
+                >
+                  {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            )}
 
             {mode === 'register' && (
               <>
-                <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-                  <Lock className="w-4 h-4 text-[#008C45] shrink-0" />
-                  <input
-                    type={showConfirm ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm New Password"
-                    required
-                    className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirm((v) => !v)}
-                    aria-label="Toggle confirm password visibility"
-                    className="text-[#5E8C72] hover:text-[#005B32] p-1 cursor-pointer"
-                  >
-                    {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-
                 <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
                   <KeyRound className="w-4 h-4 text-[#008C45] shrink-0" />
                   <input
@@ -314,7 +377,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
             {/* Terms + Forgot Password row */}
             <div className="flex items-center justify-between gap-2 pt-1">
-              {mode !== 'forgot' ? (
+              {mode === 'login' || mode === 'register' ? (
                 <label className="inline-flex items-center gap-2 text-xs text-[#344A3E] cursor-pointer select-none">
                   <button
                     type="button"
@@ -342,7 +405,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 </label>
               ) : (
                 <span className="text-xs text-[#5B7265]">
-                  Verify with your Withdrawal Password
+                  {mode === 'forgot'
+                    ? 'We will email you a secure password reset link'
+                    : 'Choose a strong password (6+ characters)'}
                 </span>
               )}
 
@@ -372,42 +437,46 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   ? 'Login Now'
                   : mode === 'register'
                     ? 'Register Now'
-                    : 'Update Password'}
+                    : mode === 'forgot'
+                      ? 'Send Reset Link'
+                      : 'Update Password'}
             </button>
           </form>
 
           {/* Bottom switch links */}
-          <div className="mt-5 text-center text-xs text-[#5E7468]">
-            {mode === 'login' ? (
-              <>
-                Don&apos;t have an account?{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode('register');
-                    setError(null);
-                  }}
-                  className="font-bold text-[#008C45] hover:underline cursor-pointer"
-                >
-                  Register
-                </button>
-              </>
-            ) : (
-              <>
-                Already have an account?{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode('login');
-                    setError(null);
-                  }}
-                  className="font-bold text-[#008C45] hover:underline cursor-pointer"
-                >
-                  Login
-                </button>
-              </>
-            )}
-          </div>
+          {mode !== 'recovery' && (
+            <div className="mt-5 text-center text-xs text-[#5E7468]">
+              {mode === 'login' ? (
+                <>
+                  Don&apos;t have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('register');
+                      setError(null);
+                    }}
+                    className="font-bold text-[#008C45] hover:underline cursor-pointer"
+                  >
+                    Register
+                  </button>
+                </>
+              ) : (
+                <>
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('login');
+                      setError(null);
+                    }}
+                    className="font-bold text-[#008C45] hover:underline cursor-pointer"
+                  >
+                    Login
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="mt-auto pt-6 flex items-center justify-between gap-2 border-t border-[#EBF6EF] text-[11px] text-[#6B8275]">
             <span>{settings.siteName} Capital</span>
