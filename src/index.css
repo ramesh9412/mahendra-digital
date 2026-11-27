@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --brand-primary: #008C45;
+    --brand-dark: #005B32;
+    --brand-light: #E7F7EE;
+    --brand-bg: #022514;
+    --brand-card: #FFFFFF;
+    --brand-text: #17231C;
+  }
+
+  body {
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    background-color: var(--brand-bg);
+    color: var(--brand-text);
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  .font-mono-num {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.brand-gradient {
+  background: linear-gradient(180deg, #009D4E 0%, #006B35 100%);
+}
+
+.brand-gradient-horizontal {
+  background: linear-gradient(90deg, #00994C 0%, #006B35 100%);
+}
+
+.brand-header-gradient {
+  background: linear-gradient(160deg, #009E4E 0%, #007A3D 55%, #005B32 100%);
+}
+
+.treasure-radial-bg {
+  background:
+    radial-gradient(circle at 50% 34%, rgba(28, 150, 82, 0.42) 0%, rgba(0, 74, 38, 0.92) 56%, #00381D 100%),
+    repeating-conic-gradient(from 0deg at 50% 34%, rgba(255, 255, 255, 0.03) 0deg 8deg, transparent 8deg 16deg);
+}
+
+.gold-cta-gradient {
+  background: linear-gradient(180deg, #F5C358 0%, #DF9B2D 100%);
+}
+
+.card-mint-border {
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  box-shadow: 0 10px 26px -10px rgba(0, 0, 0, 0.42);
+}
+
+.mahendra-page-bg {
+  background:
+    radial-gradient(circle at 18% 6%, rgba(212, 175, 55, 0.16) 0%, transparent 42%),
+    radial-gradient(circle at 86% 24%, rgba(16, 185, 129, 0.14) 0%, transparent 45%),
+    linear-gradient(170deg, #043D21 0%, #022514 48%, #01170C 100%);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.luxury-plan-card {
+  background: linear-gradient(155deg, #044122 0%, #022C17 52%, #011B0E 100%);
+  border: 1.5px solid rgba(212, 175, 55, 0.72);
+  box-shadow:
+    0 12px 28px -10px rgba(1, 27, 14, 0.55),
+    inset 0 1px 0 rgba(255, 226, 122, 0.28);
+}
+
+.luxury-gold-text {
+  background: linear-gradient(180deg, #FFF3B8 0%, #F5C358 48%, #C98A1A 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.luxury-gold-btn {
+  background: linear-gradient(180deg, #FFE27A 0%, #E6AE35 55%, #C98A1A 100%);
+  color: #03311A;
+  box-shadow:
+    0 6px 16px -4px rgba(230, 174, 53, 0.45),
+    inset 0 1px 0 rgba(255, 251, 235, 0.7);
+}
+
+.luxury-gold-btn:hover {
+  filter: brightness(1.06);
+}
+
