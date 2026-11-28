@@ -4,7 +4,6 @@ import {
   ChevronLeft,
   CreditCard,
   Info,
-  KeyRound,
   Wallet,
 } from 'lucide-react';
 import { formatDateTime, formatINR } from '../lib/api';
@@ -39,7 +38,6 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
 }) => {
   const [amountStr, setAmountStr] = useState('0');
   const [selectedBankId, setSelectedBankId] = useState(me.bankAccounts[0]?.id ?? '');
-  const [withdrawalPassword, setWithdrawalPassword] = useState('');
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
   const [withdrawalsLoading, setWithdrawalsLoading] = useState(true);
   const [idempotencyKey, setIdempotencyKey] = useState<string>(generateIdempotencyKey);
@@ -101,14 +99,12 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
       const res = await submitWithdrawalRequest({
         amount: grossAmount,
         bankAccountId: selectedBankId,
-        withdrawalPassword,
         idempotencyKey,
       });
       setSuccess(
         `Withdrawal ${res.withdrawalRef} submitted (Net payout ${formatINR(res.netAmount)}). Status: Pending.`
       );
       setAmountStr('0');
-      setWithdrawalPassword('');
       setIdempotencyKey(generateIdempotencyKey());
       await Promise.all([loadWithdrawals(), onRefreshMe()]);
     } catch (err) {
@@ -304,35 +300,6 @@ export const WithdrawPage: React.FC<WithdrawPageProps> = ({
                 <span className="font-display font-extrabold text-base text-[#008C45] tabular-nums">
                   {formatINR(netReceive)}
                 </span>
-              </div>
-            </div>
-
-            {/* Withdrawal Password */}
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-bold text-[#17231C]">
-                  Withdrawal Password
-                </label>
-                {me.hasWithdrawalPin === false && (
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('personal-info')}
-                    className="text-[11px] font-bold text-[#008C45] hover:underline cursor-pointer"
-                  >
-                    Set PIN first →
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-2 px-3.5 h-11 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0]">
-                <KeyRound className="w-4 h-4 text-[#008C45] shrink-0" />
-                <input
-                  type="password"
-                  required
-                  value={withdrawalPassword}
-                  onChange={(e) => setWithdrawalPassword(e.target.value)}
-                  placeholder="Enter your withdrawal password"
-                  className="w-full bg-transparent text-sm text-[#17231C] focus:outline-none"
-                />
               </div>
             </div>
           </div>

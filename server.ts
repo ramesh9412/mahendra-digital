@@ -140,10 +140,6 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Passwords do not match.' });
     return;
   }
-  if (withdrawalPassword.length < 4 || withdrawalPassword.length > 100) {
-    res.status(400).json({ error: 'Withdrawal password must be at least 4 characters.' });
-    return;
-  }
 
   const existing = db.prepare('SELECT id FROM users WHERE phone = ?').get(phoneRaw);
   if (existing) {
@@ -1170,19 +1166,6 @@ app.post('/api/withdrawals', requireUserAuth, (req: AuthenticatedRequest, res: R
   }
   if (!bankAccountId) {
     res.status(400).json({ error: 'Please bind and select a bank account.' });
-    return;
-  }
-  if (!withdrawalPassword) {
-    res.status(400).json({ error: 'Enter your withdrawal password.' });
-    return;
-  }
-
-  const user = db
-    .prepare('SELECT withdrawal_password_hash FROM users WHERE id = ?')
-    .get(userId) as { withdrawal_password_hash: string } | undefined;
-
-  if (!user || !verifySecret(withdrawalPassword, user.withdrawal_password_hash)) {
-    res.status(401).json({ error: 'Incorrect withdrawal password.' });
     return;
   }
 

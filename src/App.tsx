@@ -350,19 +350,6 @@ export default function App() {
         </div>
       )}
 
-      {me.hasWithdrawalPin === false && activeTab !== 'personal-info' && (
-        <div className="bg-[#FFF9E6] border-b border-[#F3D88C] px-4 py-2 text-center text-xs font-semibold text-[#6E4B00] flex flex-wrap items-center justify-center gap-2">
-          <span>Please set your Withdrawal Password in Personal Information before requesting payouts.</span>
-          <button
-            type="button"
-            onClick={() => setActiveTab('personal-info')}
-            className="px-3 py-1 rounded-full bg-[#008C45] text-white text-[11px] font-bold cursor-pointer"
-          >
-            Set PIN Now
-          </button>
-        </div>
-      )}
-
       <main>
         {activeTab === 'home' && (
           <HomePage

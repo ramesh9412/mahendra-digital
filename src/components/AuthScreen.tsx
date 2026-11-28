@@ -4,7 +4,6 @@ import {
   Eye,
   EyeOff,
   Globe,
-  KeyRound,
   Lock,
   Mail,
   Phone,
@@ -48,13 +47,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [withdrawalPassword, setWithdrawalPassword] = useState('');
   const [invitationCode, setInvitationCode] = useState(initialReferralCode);
   const [acceptedTerms, setAcceptedTerms] = useState(true);
 
   const [showPass, setShowPass] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [showWithdrawPass, setShowWithdrawPass] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,10 +90,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setError('Login passwords do not match.');
         return;
       }
-      if (withdrawalPassword.length < 4) {
-        setError('Withdrawal password must be at least 4 characters.');
-        return;
-      }
     }
 
     if (mode === 'recovery') {
@@ -121,7 +114,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           countryCode,
           phone,
           password,
-          withdrawalPassword,
           invitationCode,
         });
         if (res.hasSession) {
@@ -341,38 +333,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             )}
 
             {mode === 'register' && (
-              <>
-                <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-                  <KeyRound className="w-4 h-4 text-[#008C45] shrink-0" />
-                  <input
-                    type={showWithdrawPass ? 'text' : 'password'}
-                    value={withdrawalPassword}
-                    onChange={(e) => setWithdrawalPassword(e.target.value)}
-                    placeholder="Enter Withdrawal Password (4+ chars)"
-                    required
-                    className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowWithdrawPass((v) => !v)}
-                    aria-label="Toggle withdrawal password visibility"
-                    className="text-[#5E8C72] hover:text-[#005B32] p-1 cursor-pointer"
-                  >
-                    {showWithdrawPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
-                  <UserPlus className="w-4 h-4 text-[#008C45] shrink-0" />
-                  <input
-                    type="text"
-                    value={invitationCode}
-                    onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
-                    placeholder="Enter Invitation Code (Optional)"
-                    className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none uppercase"
-                  />
-                </div>
-              </>
+              <div className="flex items-center gap-2.5 px-3.5 h-12 rounded-2xl bg-[#F4FAF7] border border-[#D4EDE0] focus-within:border-[#008C45] focus-within:ring-2 focus-within:ring-[#008C45]/15 transition">
+                <UserPlus className="w-4 h-4 text-[#008C45] shrink-0" />
+                <input
+                  type="text"
+                  value={invitationCode}
+                  onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
+                  placeholder="Enter Invitation Code (Optional)"
+                  className="w-full bg-transparent text-sm text-[#17231C] placeholder:text-[#829B8D] focus:outline-none uppercase"
+                />
+              </div>
             )}
 
             {/* Terms + Forgot Password row */}

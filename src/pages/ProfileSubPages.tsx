@@ -346,15 +346,10 @@ export const PersonalInfoPage: React.FC<{
   onRefreshMe: () => Promise<void>;
 }> = ({ me, onBack, onRefreshMe }) => {
   const [username, setUsername] = useState(me.profile.username);
-  const [kind, setKind] = useState<'login' | 'withdrawal'>(
-    me.hasWithdrawalPin === false ? 'withdrawal' : 'login'
-  );
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-
-  const needsInitialPin = kind === 'withdrawal' && me.hasWithdrawalPin === false;
 
   const handleSaveName = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -376,16 +371,12 @@ export const PersonalInfoPage: React.FC<{
     try {
       const responseMsg = await changeUserPassword({
         email: me.user.email || '',
-        kind,
-        currentPassword: needsInitialPin ? '' : currentPassword,
+        currentPassword,
         newPassword,
       });
       setMsg(responseMsg);
       setCurrentPassword('');
       setNewPassword('');
-      if (kind === 'withdrawal') {
-        await onRefreshMe();
-      }
     } catch (error) {
       setErr(error instanceof Error ? error.message : 'Password change failed.');
     }
@@ -427,58 +418,30 @@ export const PersonalInfoPage: React.FC<{
         </form>
 
         <form onSubmit={handleChangePassword} className="bg-white rounded-[24px] card-mint-border p-4 sm:p-5 space-y-3">
-          <h2 className="font-display font-bold text-base text-[#17231C]">Password Security</h2>
-          <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#E7F7EE]">
-            {(['login', 'withdrawal'] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => {
-                  setKind(k);
-                  setErr(null);
-                  setMsg(null);
-                }}
-                className={`py-2 rounded-lg text-xs font-bold capitalize cursor-pointer ${
-                  kind === k ? 'brand-gradient text-white' : 'text-[#4C6356]'
-                }`}
-              >
-                {k} Password
-              </button>
-            ))}
-          </div>
+          <h2 className="font-display font-bold text-base text-[#17231C]">Login Password Security</h2>
 
-          {needsInitialPin ? (
-            <div className="p-2.5 rounded-xl bg-[#FFF9E6] border border-[#F3D88C] text-[11px] font-semibold text-[#6E4B00]">
-              Set your 4+ character Withdrawal Password for authorizing future payouts.
-            </div>
-          ) : (
-            <input
-              type="password"
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              placeholder={`Current ${kind} password`}
-              className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
-            />
-          )}
+          <input
+            type="password"
+            required
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Current login password"
+            className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
+          />
 
           <input
             type="password"
             required
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
-            placeholder={
-              needsInitialPin ? 'Create withdrawal password (4+ chars)' : `New ${kind} password`
-            }
+            placeholder="New login password (6+ chars)"
             className="w-full h-11 px-3.5 rounded-xl bg-[#F4FAF7] border border-[#D4EDE0] text-sm"
           />
           <button
             type="submit"
             className="w-full h-11 rounded-full brand-gradient text-white font-display font-bold text-sm cursor-pointer"
           >
-            {needsInitialPin
-              ? 'Set Withdrawal Password'
-              : `Update ${kind === 'login' ? 'Login' : 'Withdrawal'} Password`}
+            Update Login Password
           </button>
         </form>
       </div>

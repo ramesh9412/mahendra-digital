@@ -146,7 +146,6 @@ export async function signUpWithSupabase(params: {
   countryCode: string;
   phone: string;
   password: string;
-  withdrawalPassword: string;
   invitationCode?: string;
 }): Promise<{ needsEmailConfirmation: boolean; hasSession: boolean }> {
   const sb = requireSupabase();
@@ -174,7 +173,7 @@ export async function signUpWithSupabase(params: {
     const { error: onboardErr } = await sb.rpc('complete_user_onboarding', {
       p_country_code: params.countryCode,
       p_phone: cleanPhone,
-      p_withdrawal_password: params.withdrawalPassword,
+      p_withdrawal_password: null,
       p_invitation_code: cleanInvite || null,
       p_username: null,
     });
@@ -219,7 +218,6 @@ export async function signOutFromSupabase(): Promise<void> {
 export async function completeUserOnboarding(params: {
   countryCode?: string;
   phone?: string;
-  withdrawalPassword?: string;
   invitationCode?: string;
   username?: string;
 }): Promise<void> {
@@ -227,7 +225,7 @@ export async function completeUserOnboarding(params: {
   const { error } = await sb.rpc('complete_user_onboarding', {
     p_country_code: params.countryCode ?? '+91',
     p_phone: params.phone ?? null,
-    p_withdrawal_password: params.withdrawalPassword ?? null,
+    p_withdrawal_password: null,
     p_invitation_code: params.invitationCode ?? null,
     p_username: params.username ?? null,
   });
@@ -343,14 +341,13 @@ export async function fetchMyWithdrawals(): Promise<WithdrawalRecord[]> {
 export async function submitWithdrawalRequest(params: {
   amount: number;
   bankAccountId: string;
-  withdrawalPassword: string;
   idempotencyKey: string;
 }): Promise<{ withdrawalId: string; withdrawalRef: string; netAmount: number }> {
   const sb = requireSupabase();
   const { data, error } = await sb.rpc('submit_withdrawal_request', {
     p_amount: params.amount,
     p_bank_account_id: params.bankAccountId,
-    p_withdrawal_password: params.withdrawalPassword,
+    p_withdrawal_password: null,
     p_idempotency_key: params.idempotencyKey,
   });
   if (error) throw new Error(formatSupabaseError(error, 'Unable to submit withdrawal request.'));
@@ -418,20 +415,10 @@ export async function updateMyProfileName(userId: string, username: string): Pro
 
 export async function changeUserPassword(params: {
   email: string;
-  kind: 'login' | 'withdrawal';
   currentPassword: string;
   newPassword: string;
 }): Promise<string> {
   const sb = requireSupabase();
-  if (params.kind === 'withdrawal') {
-    const { data, error } = await sb.rpc('update_withdrawal_password', {
-      p_current_password: params.currentPassword,
-      p_new_password: params.newPassword,
-    });
-    if (error) throw new Error(formatSupabaseError(error, 'Unable to update withdrawal password.'));
-    return (data as { message?: string })?.message ?? 'Withdrawal password updated.';
-  }
-
   if (params.newPassword.length < 6) {
     throw new Error('New login password must be at least 6 characters.');
   }

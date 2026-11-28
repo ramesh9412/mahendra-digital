@@ -13,7 +13,6 @@ import {
   Pencil,
   ReceiptText,
   Settings,
-  ShieldCheck,
   UserCheck,
 } from 'lucide-react';
 import { MAHENDRA_LOGO_SRC } from '../components/BrandVisuals';
@@ -226,26 +225,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             </a>
           </div>
         </div>
-
-        {/* Admin Console Link */}
-        <button
-          type="button"
-          onClick={() => onNavigate('admin')}
-          className="w-full bg-white rounded-[22px] card-mint-border p-4 flex items-center justify-between gap-3 text-left hover:bg-[#F8FCFA] transition cursor-pointer"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#E7F7EE] text-[#005B32] flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="font-display font-bold text-sm text-[#17231C]">Admin Dashboard</div>
-              <div className="text-xs text-[#7B9184]">
-                Manage {settings.siteName} products, approvals &amp; settings
-              </div>
-            </div>
-          </div>
-          <ChevronRight className="w-4 h-4 text-[#9BB0A3]" />
-        </button>
 
         {/* Logout Card */}
         <button

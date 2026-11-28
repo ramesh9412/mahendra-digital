@@ -835,12 +835,12 @@ BEGIN
 END;
 $$;
 
--- Submit withdrawal request (atomic balance deduction + immutable ledger + PIN verify)
+-- Submit withdrawal request (atomic balance deduction + immutable ledger)
 CREATE OR REPLACE FUNCTION public.submit_withdrawal_request(
   p_amount NUMERIC,
   p_bank_account_id UUID,
-  p_withdrawal_password TEXT,
-  p_idempotency_key TEXT
+  p_withdrawal_password TEXT DEFAULT NULL,
+  p_idempotency_key TEXT DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -853,7 +853,6 @@ DECLARE
   v_min_w NUMERIC(14,2);
   v_max_w NUMERIC(14,2);
   v_fee_pct NUMERIC(5,2);
-  v_pin_hash TEXT;
   v_bank public.bank_accounts%ROWTYPE;
   v_profile public.profiles%ROWTYPE;
   v_existing public.withdrawals%ROWTYPE;
@@ -891,14 +890,6 @@ BEGIN
 
   IF p_amount IS NULL OR p_amount < v_min_w OR p_amount > v_max_w THEN
     RAISE EXCEPTION 'Withdrawal amount must be between ₹% and ₹%.', v_min_w, v_max_w;
-  END IF;
-
-  SELECT withdrawal_password_hash INTO v_pin_hash FROM public.user_secrets WHERE user_id = v_uid;
-  IF v_pin_hash IS NULL THEN
-    RAISE EXCEPTION 'Please set a withdrawal password in Personal Information first.';
-  END IF;
-  IF p_withdrawal_password IS NULL OR crypt(p_withdrawal_password, v_pin_hash) <> v_pin_hash THEN
-    RAISE EXCEPTION 'Incorrect withdrawal password.';
   END IF;
 
   SELECT * INTO v_bank FROM public.bank_accounts WHERE id = p_bank_account_id AND user_id = v_uid;
