@@ -136,3 +136,6 @@ BEGIN
   );
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.submit_withdrawal_request(NUMERIC, UUID, TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.submit_withdrawal_request(NUMERIC, UUID, TEXT, TEXT) TO authenticated;

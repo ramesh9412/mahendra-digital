@@ -350,7 +350,15 @@ export async function submitWithdrawalRequest(params: {
     p_withdrawal_password: null,
     p_idempotency_key: params.idempotencyKey,
   });
-  if (error) throw new Error(formatSupabaseError(error, 'Unable to submit withdrawal request.'));
+  if (error) {
+    const msg = formatSupabaseError(error, 'Unable to submit withdrawal request.');
+    if (/withdrawal password/i.test(msg)) {
+      throw new Error(
+        'Server withdrawal RPC still expects the old PIN check. Please run supabase/migrations/202611270004_remove_withdrawal_password_requirement.sql in your Supabase SQL Editor.'
+      );
+    }
+    throw new Error(msg);
+  }
   return data as { withdrawalId: string; withdrawalRef: string; netAmount: number };
 }
 
